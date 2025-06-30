@@ -1,0 +1,39 @@
+import win32com.client
+
+# PowerPoint 실행
+ppt_app = win32com.client.Dispatch("PowerPoint.Application")
+ppt_app.Visible = True  # 창을 띄우지 않으려면 False
+
+# 프레젠테이션 열기
+presentation = ppt_app.Presentations.Open(r"C:\path\to\your_file.pptx", WithWindow=False)
+
+# 슬라이드 인덱스는 1부터 시작 (슬라이드 2는 index 2)
+slide = presentation.Slides(2)
+
+# 추출할 셀 위치와 키워드 매핑
+target_cells = {
+    (2, 1): "목적",
+    (4, 1): "배경 필요성",
+    (4, 3): "huddle",
+    (6, 1): "현재 지표",
+    (6, 2): "개선 지표"
+}
+
+# 테이블 찾기
+for shape in slide.Shapes:
+    if shape.HasTable:
+        table = shape.Table
+        print("✅ 슬라이드 2에서 테이블 발견")
+
+        for (row, col), label in target_cells.items():
+            try:
+                cell = table.Cell(row, col).Shape.TextFrame.TextRange
+                full_text = ""
+                for i in range(1, cell.Paragraphs().Count + 1):
+                    para_text = cell.Paragraphs(i).Text
+                    full_text += para_text.strip() + " "
+                full_text = full_text.strip()
+
+                print(f"[{label}] (Cell[{row},{col}]) : {full_text}")
+            except Exception as e:
+                print(f"[{label}] (Cell[{row},{col}]) : Error - {e}")
