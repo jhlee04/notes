@@ -1,0 +1,82 @@
+import os
+import win32com.client
+import pandas as pd
+
+# 분석 대상 폴더 설정
+pptx_folder = r"C:\path\to\your\pptx_files"
+
+# 추출할 셀 위치 및 레이블 매핑
+target_cells = {
+    (1, 2): "과제명",
+    (2, 2): "담당자",
+    (2, 5): "기간",
+    (3, 2): "목적",
+    (5, 2): "배경 필요성",
+    (5, 4): "huddle",
+    (7, 2): "현재 지표",
+    (7, 3): "개선 지표"
+}
+
+# 결과 저장 리스트
+results = []
+
+# PowerPoint 실행
+ppt_app = win32com.client.Dispatch("PowerPoint.Application")
+ppt_app.Visible = False
+
+# PPTX 파일 순회
+for filename in os.listdir(pptx_folder):
+    if filename.endswith(".pptx"):
+        filepath = os.path.join(pptx_folder, filename)
+        print(f"📂 Processing: {filename}")
+        try:
+            # 프레젠테이션 열기
+            presentation = ppt_app.Presentations.Open(filepath, WithWindow=False)
+
+            # 슬라이드 2만 대상
+            slide = presentation.Slides(2)
+
+            # 결과 저장용 dict
+            row_data = {"파일명": filename}
+
+            # 테이블 찾기
+            table_found = False
+            for shape in slide.Shapes:
+                if shape.HasTable:
+                    table = shape.Table
+                    table_found = True
+                    for (row, col), label in target_cells.items():
+                        try:
+                            cell = table.Cell(row, col).Shape.TextFrame.TextRange
+                            full_text = ""
+                            for i in range(1, cell.Paragraphs().Count + 1):
+                                para_text = cell.Paragraphs(i).Text
+                                full_text += para_text.strip() + " "
+                            row_data[label] = full_text.strip()
+                        except Exception as e:
+                            row_data[label] = f"(오류: {e})"
+                    break  # 첫 테이블만 사용
+
+            if not table_found:
+                for label in target_cells.values():
+                    row_data[label] = "(표 없음)"
+
+            results.append(row_data)
+            presentation.Close()
+
+        except Exception as e:
+            print(f"❌ Error in {filename}: {e}")
+
+# PowerPoint 종료
+ppt_app.Quit()
+
+# DataFrame 생성
+df = pd.DataFrame(results)
+
+# 결과 확인
+print(df.head())
+
+# 파일로 저장
+output_path = os.path.join(pptx_folder, "pptx_요약_결과.xlsx")
+df.to_excel(output_path, index=False)
+print(f"✅ 결과 저장 완료: {output_path}")
