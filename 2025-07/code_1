@@ -2,9 +2,9 @@ import win32com.client
 
 # PowerPoint 열기
 ppt_app = win32com.client.Dispatch("PowerPoint.Application")
-ppt_app.Visible = True  # (Optional) PowerPoint 창 보이게
+ppt_app.Visible = True  # (Optional) PowerPoint 창 보이기
 
-# 파일 열기
+# 프레젠테이션 열기
 presentation = ppt_app.Presentations.Open(r"C:\path\to\your_file.pptx", WithWindow=False)
 
 for slide_idx, slide in enumerate(presentation.Slides):
@@ -19,10 +19,20 @@ for slide_idx, slide in enumerate(presentation.Slides):
             
             for row in range(1, rows + 1):
                 for col in range(1, cols + 1):
-                    cell_text = table.Cell(row, col).Shape.TextFrame.TextRange.Text.strip()
-                    if cell_text:
-                        print(f"    - Cell[{row-1}, {col-1}] : {cell_text}")
+                    try:
+                        # Paragraph 단위로 수집
+                        cell = table.Cell(row, col).Shape.TextFrame.TextRange
+                        full_text = ""
+                        for i in range(1, cell.Paragraphs().Count + 1):
+                            para_text = cell.Paragraphs(i).Text
+                            full_text += para_text.strip() + " "
+                        
+                        full_text = full_text.strip()
+                        if full_text:
+                            print(f"    - Cell[{row-1}, {col-1}] : {full_text}")
+                    except Exception as e:
+                        print(f"    - Cell[{row-1}, {col-1}] : (Error: {e})")
 
-# 종료 (선택)
+# 종료 시 선택적으로 아래 코드 사용
 # presentation.Close()
 # ppt_app.Quit()
