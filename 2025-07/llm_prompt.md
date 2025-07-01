@@ -220,8 +220,110 @@ Reason: 목표 조건 달성 중이며, 남은 액션이 명확히 진행 중
 
 5. 결과 분리 → LLM_status3, LLM_reason 저장
 
+---
+✅ 전체 LLM 코드 
 
+ ```
+import pandas as pd
+from tqdm import tqdm
 
- 
+# ✅ CSV 로딩 (파일명은 사내망 환경에 맞게 수정)
+meeting_df = pd.read_csv('회의록_요약_status.csv')
+proposal_df = pd.read_csv('과제발의서.csv')
+
+# ✅ 날짜 형식 변환 (꼭 필요)
+meeting_df['회의일'] = pd.to_datetime(meeting_df['회의일'], errors='coerce')
+
+# ✅ 과제별 회의일 기준 정렬
+meeting_df = meeting_df.sort_values(by=["과제명", "회의일"])
+
+# ✅ 과제별 이전 상태 (1회분)도 shift로 저장
+meeting_df['이전_요약'] = meeting_df.groupby('과제명')['회의 요약'].shift(1)
+meeting_df['이전_상태'] = meeting_df.groupby('과제명')['검토 status'].shift(1)
+
+# ✅ 발의서 병합
+merged_df = pd.merge(meeting_df, proposal_df, on=['EMD', '팀', '과제명'], how='left')
+
+# ✅ 누적 이력 요약 함수
+def generate_full_history(df):
+    df = df.sort_values(by=["과제명", "회의일"])
+    all_histories = []
+
+    for name, group in df.groupby('과제명'):
+        history_list = []
+        for i in range(len(group)):
+            past = group.iloc[:i]
+            history = '\n'.join(
+                f"- {row['회의일'].date().isoformat()}: {row['회의 요약']} → {row['검토 status']}"
+                for _, row in past.iterrows()
+                if pd.notna(row['회의 요약']) and pd.notna(row['검토 status']) and pd.notna(row['회의일'])
+            )
+            history_list.append(history)
+        group['전체_이력_요약'] = history_list
+        all_histories.append(group)
+
+    return pd.concat(all_histories)
+
+# ✅ 누적 이력 반영
+merged_df = generate_full_history(merged_df)
+
+# ✅ 프롬프트 생성 함수 (출력 예시 포함)
+def generate_prompt(row):
+    prompt = f"[과제명] {row['과제명']}\n[소속 팀] {row['팀']}\n"
+
+    if pd.notna(row.get('개선 목표 지표', '')):
+        prompt += f"[과제 목적] {row.get('목적', '')}\n"
+        prompt += f"[배경 및 필요성] {row.get('배경 필요성', '')}\n"
+        prompt += f"[이전 지표] {row.get('이전 지표', '')}\n"
+        prompt += f"[개선 목표 지표] {row.get('개선 목표 지표', '')}\n"
+
+    if pd.notna(row.get('전체_이력_요약', '')):
+        prompt += f"\n[과거 회의 요약 및 상태 이력]\n{row['전체_이력_요약']}\n"
+
+    prompt += f"\n[현재 회의 요약] ({row['회의일'].date().isoformat()})\n{row['회의 요약']}\n"
+
+    if pd.notna(row.get('액션 아이템', '')):
+        prompt += f"\n[액션 아이템]\n{row['액션 아이템']}\n"
+
+    prompt += """
+질문: 이 과제의 현재 상태를 아래 중 하나로 판단하고, 간단히 이유를 설명해주세요.
+→ ['on-track', 'at-risk', 'delayed', 'completed']
+
+[출력 형식 예시]
+Status: on-track
+Reason: 목표 조건 달성 중이며, 남은 액션이 명확히 진행 중
+"""
+    return prompt
+
+# ✅ tqdm으로 진행 표시하며 프롬프트 생성
+tqdm.pandas(desc="프롬프트 생성 중")
+merged_df['LLM_프롬프트'] = merged_df.progress_apply(generate_prompt, axis=1)
+
+# ✅ 사내 LLM 호출 함수 예시 (실제 API에 맞게 수정 필요)
+def call_llm(prompt: str) -> str:
+    # 예시 출력 (실제는 requests.post 또는 내부 API 사용)
+    return "Status: at-risk\nReason: 개선 방향이 모호하며, 목표와의 차이가 큼"
+
+# ✅ LLM 호출 실행
+tqdm.pandas(desc="LLM 응답 생성 중")
+merged_df['LLM_raw_response'] = merged_df['LLM_프롬프트'].progress_apply(call_llm)
+
+# ✅ 응답 파싱 함수
+def parse_status(response):
+    lines = response.splitlines()
+    status_line = next((l for l in lines if l.lower().startswith("status:")), "")
+    reason_line = next((l for l in lines if l.lower().startswith("reason:")), "")
+    return pd.Series([
+        status_line.replace("Status:", "").strip(),
+        reason_line.replace("Reason:", "").strip()
+    ], index=["LLM_status3", "LLM_reason"])
+
+# ✅ 파싱된 결과 추가
+parsed_df = merged_df['LLM_raw_response'].apply(parse_status)
+merged_df = pd.concat([merged_df, parsed_df], axis=1)
+
+# ✅ 결과 저장 (선택 사항)
+# merged_df.to_csv("status_결과.csv", index=False)
+```
 
  
