@@ -326,4 +326,42 @@ merged_df = pd.concat([merged_df, parsed_df], axis=1)
 # merged_df.to_csv("status_결과.csv", index=False)
 ```
 
- 
+```
+def generate_prompt(row):
+    prompt = f"[과제명] {row['과제명']}\n[소속 팀] {row['팀']}\n"
+
+    # ✅ 발의서 정보 포함
+    if pd.notna(row.get('개선 목표 지표', '')):
+        prompt += f"[과제 목적] {row.get('목적', '')}\n"
+        prompt += f"[배경 및 필요성] {row.get('배경 필요성', '')}\n"
+        prompt += f"[이전 지표] {row.get('이전 지표', '')}\n"
+        prompt += f"[개선 목표 지표] {row.get('개선 목표 지표', '')}\n"
+
+    # ✅ 전체 이력 요약 포함 (없을 경우 '발의 회의' 문구 추가)
+    if row.get('전체_이력_요약', ''):
+        prompt += f"\n[과거 회의 요약 및 상태 이력]\n{row['전체_이력_요약']}\n"
+    else:
+        prompt += (
+            "\n[과제 진행 단계 참고]\n"
+            "이 회의는 해당 과제의 최초 회의로, 과제 발의 또는 초기 논의 단계일 수 있습니다.\n"
+        )
+
+    # ✅ 현재 회의 요약
+    prompt += f"\n[현재 회의 요약] ({row['회의일'].date().isoformat()})\n{row['회의 요약']}\n"
+
+    # ✅ 액션 아이템
+    if pd.notna(row.get('액션 아이템', '')):
+        prompt += f"\n[액션 아이템]\n{row['액션 아이템']}\n"
+
+    # ✅ 질문 + 출력 예시
+    prompt += """
+질문: 이 과제의 현재 상태를 아래 중 하나로 판단하고, 간단히 이유를 설명해주세요.
+→ ['on-track', 'at-risk', 'delayed', 'completed']
+
+[출력 형식 예시]
+Status: on-track
+Reason: 목표 조건 달성 중이며, 남은 액션이 명확히 진행 중
+"""
+    return prompt
+
+```
