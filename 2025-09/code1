@@ -1,0 +1,117 @@
+import pandas as pd
+import os
+import re
+
+def extract_weekly_report_data(base_path):
+    """
+    지정된 경로에서 주간 보고 파일 정보를 추출하여 DataFrame을 생성합니다.
+    
+    Args:
+        base_path (str): 부서별 폴더의 상위 경로.
+        
+    Returns:
+        pd.DataFrame: 추출된 정보를 담은 DataFrame.
+    """
+    data = []
+    
+    # 윈도우 환경에서는 '/' 대신 '\\'를 사용해야 할 수도 있습니다.
+    # macOS/Linux 환경에서는 '/'가 더 일반적입니다.
+    # 따라서 os.path.join을 사용하여 OS에 맞게 경로를 결합하는 것이 좋습니다.
+    department_path = os.path.join(base_path, 'DTS')
+    team_path = os.path.join(department_path, 'ESD-DRAM')
+    
+    # 예시에서는 특정 파일을 지정합니다. 실제 사용 시에는 폴더를 탐색해야 합니다.
+    # 여기서는 예시 파일을 가정하고 코드를 작성합니다.
+    # 만약 '주간 보고 텍스트 파일'의 이름이 매번 바뀐다면,
+    # 해당 폴더 내의 모든 파일을 순회하도록 코드를 수정해야 합니다.
+    # 예: for filename in os.listdir(team_path):
+    file_path = os.path.join(team_path, 'weekly_report.txt') # 'weekly_report.txt'는 예시 파일명입니다.
+    
+    if os.path.exists(file_path):
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            
+            # 첫 번째 줄에서 'WW'로 시작하는 주차 정보 추출
+            first_line = lines[0].strip()
+            ww_match = re.search(r'WW\s*(\d+)', first_line)
+            weekly_week = ww_match.group(1) if ww_match else None
+            
+            # 두 번째 줄에서 작성 날짜 추출
+            second_line = lines[1].strip()
+            date_match = re.search(r'(\d{4}-\d{1,2}-\d{1,2})', second_line)
+            report_date = date_match.group(1) if date_match else None
+            
+            # 부서 및 팀 정보는 폴더 구조에서 추출
+            department = os.path.basename(department_path)
+            team = os.path.basename(team_path)
+            
+            # 추출된 정보를 딕셔너리로 저장
+            data.append({
+                '부서': department,
+                '팀': team,
+                '주차(WW)': weekly_week,
+                '작성일': report_date
+            })
+            
+    # DataFrame 생성
+    df = pd.DataFrame(data)
+    return df
+
+# 사용 예시
+# base_path는 'DTS' 폴더가 있는 상위 경로를 지정해야 합니다.
+# 예시 코드의 경우, 현재 스크립트가 실행되는 경로에 'DTS' 폴더가 있다고 가정합니다.
+base_folder = '.' # '.'은 현재 디렉토리를 의미합니다.
+weekly_report_df = extract_weekly_report_data(base_folder)
+
+print(weekly_report_df)
+
+
+
+
+# ... (앞부분 import 생략)
+
+def extract_all_weekly_report_data(base_path):
+    data = []
+    
+    # base_path 아래의 모든 하위 디렉토리와 파일을 순회
+    for root, dirs, files in os.walk(base_path):
+        for file in files:
+            # 파일 확장자가 '.txt'인 경우만 처리
+            if file.endswith('.txt'):
+                file_path = os.path.join(root, file)
+                
+                # 부서 및 팀 정보 추출
+                # 예: 'DTS/ESD-DRAM' 경로에서 'DTS'와 'ESD-DRAM'을 분리
+                path_parts = root.split(os.sep)
+                if len(path_parts) >= 2:
+                    department = path_parts[-2]
+                    team = path_parts[-1]
+                else:
+                    department = None
+                    team = None
+
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                        
+                        if len(lines) >= 2:
+                            first_line = lines[0].strip()
+                            second_line = lines[1].strip()
+                            
+                            ww_match = re.search(r'WW\s*(\d+)', first_line)
+                            weekly_week = ww_match.group(1) if ww_match else None
+                            
+                            date_match = re.search(r'(\d{4}-\d{1,2}-\d{1,2})', second_line)
+                            report_date = date_match.group(1) if date_match else None
+                            
+                            data.append({
+                                '부서': department,
+                                '팀': team,
+                                '주차(WW)': weekly_week,
+                                '작성일': report_date
+                            })
+                except Exception as e:
+                    print(f"파일 처리 중 오류 발생: {file_path}, 오류: {e}")
+                    
+    df = pd.DataFrame(data)
+    return df
