@@ -1,0 +1,209 @@
+가능합니다! 요청에서 쿠키(SMSESSION, AMTOKEN) 를 읽어 내부 API를 호출해 사번/팀/이름을 받아오고, 예약 시 입력 없이 자동으로 예약자 정보를 채우도록 바꿀 수 있어요.
+아래처럼 최소 수정만 하면 됩니다. (API URL은 사용자가 바꾼다고 하셨으니 환경변수로 처리)
+
+⸻
+
+1) 의존성 추가
+
+requirements.txt에 아래 한 줄 추가:
+
+requests==2.32.3
+
+
+⸻
+
+2) app.py 변경사항
+
+(A) 상단 import + 환경변수 설정
+
+import os
+import requests   # 추가
+
+환경변수 예시 (로컬):
+SSO_USERINFO_URL=https://your-internal-api.example.com/userinfo
+
+(B) SSO 사용자 정보 조회 헬퍼 추가
+
+def fetch_user_from_sso(flask_request):
+    """
+    요청 쿠키 SMSESSION, AMTOKEN을 내부 API로 전달해 사용자 정보를 가져옵니다.
+    반환: {"emp_no": "...", "dept_name_kor": "...", "emp_name_kor": "..."} (필드 없으면 None)
+    실패 시 None 반환
+    """
+    api_url = os.environ.get("SSO_USERINFO_URL")
+    if not api_url:
+        return None
+
+    # 요청에서 쿠키 추출 (대소문자 주의: 사내 정책에 맞추세요)
+    smsession = flask_request.cookies.get("SMSESSION") or flask_request.cookies.get("SMSESSIOn")
+    amtoken   = flask_request.cookies.get("AMTOKEN")
+    if not (smsession and amtoken):
+        return None
+
+    try:
+        # 내부망에서만 통신하는 것이 안전합니다. verify=True(사내 CA) 권장.
+        resp = requests.get(
+            api_url,
+            cookies={"SMSESSION": smsession, "AMTOKEN": amtoken},
+            timeout=3.0
+        )
+        resp.raise_for_status()
+        data = resp.json() if resp.content else {}
+        # 사내 스키마에 맞춰 키 매핑 (이름이 없을 수도 있으니 방어코드)
+        return {
+            "emp_no": data.get("EMP_NO"),
+            "dept_name_kor": data.get("DEPT_NAME_KOR"),
+            "emp_name_kor": data.get("EMP_NAME_KOR") or data.get("EMP_NM_KOR") or data.get("NAME_KOR"),
+        }
+    except Exception:
+        return None
+
+(C) 주간 화면에서 사용자 정보 템플릿으로 전달
+
+week_view() 리턴 부분에 user_ctx=... 추가:
+
+@app.route("/week")
+def week_view():
+    # ...기존 코드 동일...
+
+    user_ctx = fetch_user_from_sso(request)  # ← 추가
+
+    return render_template(
+        "week.html",
+        monday=monday,
+        days=days,
+        slots=SLOTS,
+        cell_bookings=cell_bookings,
+        prev_y=prev_monday.year, prev_m=prev_monday.month, prev_d=prev_monday.day,
+        next_y=next_monday.year, next_m=next_monday.month, next_d=next_monday.day,
+        user_ctx=user_ctx,   # ← 추가
+    )
+
+(D) 예약 생성 시 ‘입력값’ 대신 SSO 정보로 저장
+
+book() 안에서 reserver를 폼에서 읽지 말고 SSO에서 강제 세팅:
+
+@app.route("/book", methods=["POST"])
+def book():
+    try:
+        title = request.form["title"].strip()
+
+        # --- 여기부터 변경 ---
+        user_ctx = fetch_user_from_sso(request)
+        if not user_ctx:
+            flash("로그인 정보 확인에 실패했습니다. (SSO)", "danger")
+            return redirect(request.referrer or url_for("root"))
+
+        # 표시 문자열(원하시는 형식으로 조합하세요)
+        # 예: "홍길동(개발1팀) / 123456"
+        display_name = []
+        if user_ctx.get("emp_name_kor"):
+            display_name.append(user_ctx["emp_name_kor"])
+        if user_ctx.get("dept_name_kor"):
+            display_name.append(f"({user_ctx['dept_name_kor']})")
+        if user_ctx.get("emp_no"):
+            display_name.append(f"/ {user_ctx['emp_no']}")
+        reserver = " ".join(display_name).strip()
+        # --- 변경 끝 ---
+
+        start_dt = datetime.fromisoformat(request.form["start_dt"])
+        end_dt = datetime.fromisoformat(request.form["end_dt"])
+
+        if end_dt <= start_dt:
+            flash("종료 시간이 시작 시간보다 늦어야 합니다.", "danger")
+            return redirect(request.referrer or url_for("root"))
+
+        conflict = Booking.query.filter(
+            Booking.start_dt < end_dt,
+            Booking.end_dt > start_dt
+        ).first()
+        if conflict:
+            flash(f"이미 예약된 시간입니다: {conflict.title}", "danger")
+            return redirect(request.referrer or url_for("root"))
+
+        db.session.add(Booking(
+            title=title,
+            reserver=reserver,   # <- SSO에서 채운 값
+            start_dt=start_dt, end_dt=end_dt
+        ))
+        db.session.commit()
+        flash("예약이 추가되었습니다.", "success")
+
+        monday = get_monday(start_dt.date())
+        return redirect(url_for("week_view", y=monday.year, m=monday.month, d=monday.day))
+    except Exception as e:
+        db.session.rollback()
+        flash(f"에러: {e}", "danger")
+        return redirect(request.referrer or url_for("root"))
+
+
+⸻
+
+3) 템플릿(모달)에서 “예약자 입력칸” 제거/대체
+
+_booking_modal.html (변경)
+	•	예약자 입력칸을 없애고 SSO에서 가져온 값을 라벨로 보여줍니다.
+	•	백엔드는 reserver 필드를 form에서 안 읽으니 히든필드는 불필요합니다.
+
+<div class="modal fade" id="bookingModal" tabindex="-1" aria-labelledby="bookingModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" action="{{ url_for('book') }}">
+        <div class="modal-header">
+          <h5 class="modal-title" id="bookingModalLabel">새 예약</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">제목</label>
+            <input type="text" class="form-control" name="title" placeholder="예: 팀 회의" required>
+          </div>
+
+          <!-- 예약자 표시 (SSO) -->
+          <div class="mb-2">
+            <div class="form-text">예약자</div>
+            {% if user_ctx %}
+              <div class="fw-semibold">
+                {{ (user_ctx.emp_name_kor or "이름") }}
+                {% if user_ctx.dept_name_kor %} ({{ user_ctx.dept_name_kor }}){% endif %}
+                {% if user_ctx.emp_no %} / {{ user_ctx.emp_no }}{% endif %}
+              </div>
+            {% else %}
+              <div class="text-danger">로그인 정보를 확인할 수 없습니다.</div>
+            {% endif %}
+          </div>
+
+          <div class="mb-2">
+            <div class="form-text">선택된 범위</div>
+            <div class="fw-semibold" id="selectedRange">-</div>
+          </div>
+
+          <input type="hidden" name="start_dt">
+          <input type="hidden" name="end_dt">
+          <div class="form-text">시간 범위는 표에서 클릭/드래그로 지정됩니다.</div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+          <button type="submit" class="btn btn-primary">저장</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+week_view()에서 user_ctx를 넘겼으므로 템플릿에서 바로 사용 가능합니다.
+
+⸻
+
+4) 보안/운영 팁
+	•	내부 API는 사내망/프록시 뒤에서만 접근 가능하게(방화벽, mTLS 등).
+	•	쿠키 값 로깅 금지(에러/접속 로그에도 남기지 않기).
+	•	실패 시 폴백 정책:
+	•	현재 코드는 SSO 실패 → 예약 불가로 처리(안전).
+	•	필요하면 “임시 수기 입력 허용” 옵션도 만들 수 있습니다.
+	•	성능: 주간 페이지 렌더 시 1회 호출(빠른 API면 OK). 더 줄이고 싶으면 세션에 10~30분 캐시.
+
+⸻
+
+원하시면 SSO_USERINFO_URL에 맞춰 키 이름 매핑(예: EMP_NM_KOR) 을 정확히 반영해서 깔끔하게 고정해드릴게요.
+또, Booking 테이블에 emp_no, dept_name 컬럼을 별도로 저장하도록 확장하는 것도 가능합니다(조회/통계에 유리).
